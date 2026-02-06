@@ -1,42 +1,25 @@
-# Dependencies
-node_modules
-/venv
-.env
-.env.enc
-.env.local
+# dependencies
+# ========================
+.deps/
+node_modules/
 
-# Smart Contract Compilation & Build Artifacts
-/build
-/artifacts
-/cache
-/out
+# build outputs
+# ========================
+artifacts/
+build-info/
+cache/
+out/
+build/
 
-# Development Environment Files
-.idea/         # JetBrains IDEs
-.vscode/       # VS Code (optional, if you have specific team settings to ignore)
-*.py[cod]      # Python byte-compiled files
-__pycache__/
+# compiler output files
+*.json
+*_metadata.json
 
-# Testing and Coverage
-/coverage
-.nyc_output
-.cache
-.pytest_cache
-
-# Logs and Temporary Files
+# logs
+# ========================
 *.log
-*.out
-nohup.out
-*.db
-*.db-journal
 
-# Specific to some blockchain frameworks (e.g., Chia)
-config/keys.yaml
-config/plots.yaml
-*.offer
-*.backup
-
-# OS and Editor Files
-.DS_Store      # macOS
-Thumbs.db      # Windows
-*.orig         # Git merge backups
+# .env files (private keys)
+# ========================
+.env
+.env.*
