@@ -1,0 +1,85 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.30;
+
+// IMPORTS
+import {Initializable}      from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {UUPSUpgradeable}    from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+
+// CONTRACT
+contract OmegaLottery is Initializable, UUPSUpgradeable, OwnableUpgradeable
+{
+    // ERRORS
+    error InvalidEntryTime();
+
+    // EVENTS
+    event LotteryCreated
+    (
+        // TODO (CW)
+    );
+
+    // TYPES
+    enum LotteryStatus 
+    {
+        NOT_STARTED,
+        OPEN,
+        CLOSED,
+        DRAWING,
+        RESOLVED
+    }
+
+    struct Lottery 
+    {
+        uint256 id;
+        uint256 entryFee;
+        uint256 startTime;
+        uint256 endTime;
+        uint256 totalPot;
+        LotteryStatus status;
+        address winner; // empty until lottery resolves
+    }
+
+    // STORAGE
+    uint256 public lotteryIdCounter;    // incrementing lottery ID. starts @ 1
+    mapping(uint256 => Lottery) internal lotteries; // lotteryId => Lottery 
+    uint256[45] private __gap;  // reserved storage gap for future updates
+
+    
+    // INITIALIZER -> runs exactly once (one-time setup, part of UUPS)
+    function initialize(address initialOwner) external initializer 
+    {
+        __Ownable_init(initialOwner);   // sets contract owner
+        __UUPSUpgradeable_init();
+
+        lotteryIdCounter = 1;
+    }
+
+    // LOTTERY CREATION
+    function createLottery(uint256 entryFee, uint256 startTime, uint256 endTime) external onlyOwner returns (uint256 lotteryId) 
+    {
+        if (startTime >= endTime) revert InvalidEntryTime();
+
+        lotteryId = lotteryIdCounter++;
+
+        Lottery storage lottery = lotteries[lotteryId];
+        lottery.id = lotteryId;
+        lottery.entryFee = entryFee;
+        lottery.startTime = startTime;
+        lottery.endTime = endTime;
+        lottery.status = LotteryStatus.NOT_STARTED;
+
+        emit LotteryCreated
+        (
+            // TODO (CW)
+        );
+    }
+
+    // VIEW FUNCTIONS (for debugging/development)
+    function getLottery(uint256 lotteryId) external view returns (Lottery memory)
+    {
+        return lotteries[lotteryId];
+    }
+
+    // UUPS
+    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
+}
