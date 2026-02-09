@@ -12,10 +12,13 @@ contract OmegaLottery is Initializable, UUPSUpgradeable, OwnableUpgradeable
     // ERRORS
     error InvalidEntryTime();
 
-    // EVENTS
+   // EVENTS
     event LotteryCreated
     (
-        // TODO (CW)
+        uint256 indexed lotteryId,
+        uint256 entryFee,
+        uint256 startTime,
+        uint256 endTime
     );
 
     // TYPES
@@ -70,7 +73,10 @@ contract OmegaLottery is Initializable, UUPSUpgradeable, OwnableUpgradeable
 
         emit LotteryCreated
         (
-            // TODO (CW)
+            lotteryId,
+            entryFee,
+            startTime,
+            endTime
         );
     }
 
