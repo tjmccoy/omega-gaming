@@ -13,8 +13,14 @@ contract OmegaLottery is Initializable, UUPSUpgradeable, OwnableUpgradeable
     using Strings for uint256;
 
     // ERRORS
+    error InsufficientFunds();
     error InvalidEntryTime();
 
+    error LotteryDNE();
+    error LotteryEnded();
+    error LotteryNotOpen();
+    error LotteryNotStarted();
+    
    // EVENTS
     event LotteryCreated
     (
@@ -22,6 +28,13 @@ contract OmegaLottery is Initializable, UUPSUpgradeable, OwnableUpgradeable
         uint256 entryFee,
         uint256 startTime,
         uint256 endTime
+    );
+
+    event LotteryEntered
+    (
+        uint256 indexed lotteryId,
+        address indexed playerAddress,
+        uint256 playerStake
     );
 
     // TYPES
@@ -64,6 +77,7 @@ contract OmegaLottery is Initializable, UUPSUpgradeable, OwnableUpgradeable
     // LOTTERY CREATION
     function createLottery(uint256 entryFee, uint256 startTime, uint256 endTime) external onlyOwner returns (uint256 lotteryId) 
     {
+        // enforce rules
         if (startTime >= endTime) revert InvalidEntryTime();
 
         lotteryId = lotteryIdCounter++;
@@ -75,13 +89,7 @@ contract OmegaLottery is Initializable, UUPSUpgradeable, OwnableUpgradeable
         lottery.endTime = endTime;
         lottery.status = LotteryStatus.NOT_STARTED;
 
-        emit LotteryCreated
-        (
-            lotteryId,
-            entryFee,
-            startTime,
-            endTime
-        );
+        emit LotteryCreated(lotteryId, entryFee, startTime, endTime);
     }
 
     // JOIN LOTTERY
@@ -89,10 +97,19 @@ contract OmegaLottery is Initializable, UUPSUpgradeable, OwnableUpgradeable
     {
         Lottery storage lottery = lotteries[lotteryId];
 
-        require(msg.value >=  lottery.entryFee, string.concat("Entry fee (eth): ", lottery.entryFee.toString()));
-        require(lottery.status == LotteryStatus.OPEN, "Lottery is not yet joinable.");
+        // enforce rules
+        if (lotteryId == 0) revert LotteryDNE();
+        if (block.timestamp < lottery.startTime) revert LotteryNotStarted();
+        if (block.timestamp >= lottery.endTime) revert LotteryEnded();
+        if (msg.value < lottery.entryFee) revert InsufficientFunds();
+        if (lottery.status != LotteryStatus.OPEN) revert LotteryNotOpen();
 
+        // update lottery state
         lotteryPlayers[lotteryId].push(msg.sender);
+        lottery.totalPot += msg.value;
+
+        // send event to frontend
+        emit LotteryEntered(lotteryId, msg.sender, msg.value);
     }
 
     // VIEW FUNCTIONS (for debugging/development)
