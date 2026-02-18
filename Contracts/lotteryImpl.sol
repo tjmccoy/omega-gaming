@@ -18,12 +18,13 @@ contract OmegaLottery is VRFConsumerBaseV2Plus
 
     error LotteryDNE();
     error LotteryEnded();
+    error LotteryNotEnded();
     error LotteryNotOpen();
     error LotteryNotStarted();
 
     error NotEnoughPlayers();
     
-   // EVENTS
+    // EVENTS
     event LotteryCreated
     (
         uint256 indexed lotteryId,
@@ -52,7 +53,7 @@ contract OmegaLottery is VRFConsumerBaseV2Plus
     struct Lottery 
     {
         uint256 id;
-        uint256 entryFee;
+        uint256 entryFee;   // expressed in WEI = To convert Wei to ETH, divide the number of Wei by 10^18
         uint256 startTime;
         uint256 endTime;
         uint256 totalPot;
@@ -74,18 +75,21 @@ contract OmegaLottery is VRFConsumerBaseV2Plus
     uint32 public numWords;
 
     mapping(uint256 => uint256) public requestToLottery;    // requestId => lotteryId
-
     uint256 public lastRequestId;
+    // END CHAINLINK VRF
 
-    constructor( uint256 subscriptionId, address vrfCoordinator, bytes32 _keyHash) VRFConsumerBaseV2Plus(vrfCoordinator)
+    constructor(/*uint256 subscriptionId, address vrfCoordinator, bytes32 _keyHash*/) VRFConsumerBaseV2Plus(0x9DdfaCa8183c41ad55329BdeeD9F6A8d53168B1B/*vrfCoordinator*/)
     {
-        s_subscriptionId = subscriptionId;
-        keyHash = _keyHash;
+        s_subscriptionId = 5381939440800401583750118558724030775370857736705249184581988840504175043599; //subscriptionId;
+        keyHash = 0x787d74caea10b2b357790d5b5247c2f63d1d91572a9846f780606e4d953677ae; //_keyHash;
         lotteryIdCounter = 1;
+        callbackGasLimit = 100_000;
+        requestConfirmations = 3;
+        numWords = 1;
     }
 
     // LOTTERY CREATION
-    function createLottery(uint256 entryFee, uint256 startTime, uint256 endTime) external onlyOwner returns (uint256 lotteryId) 
+    function createLottery(uint256 entryFee/*, uint256 startTime, uint256 endTime*/) external onlyOwner returns (uint256 lotteryId) 
     {
         // enforce rules
         //if (startTime >= endTime) revert InvalidEntryTime();
@@ -95,11 +99,11 @@ contract OmegaLottery is VRFConsumerBaseV2Plus
         Lottery storage lottery = lotteries[lotteryId];
         lottery.id = lotteryId;
         lottery.entryFee = entryFee;
-        lottery.startTime = startTime;
-        lottery.endTime = endTime;
+        lottery.startTime = block.timestamp;        // placeholder for testing
+        lottery.endTime = block.timestamp + 300;    // placeholder for testing -> 5 min after it starts
         lottery.status = LotteryStatus.NOT_STARTED;
 
-        emit LotteryCreated(lotteryId, entryFee, startTime, endTime);
+        emit LotteryCreated(lotteryId, entryFee, lottery.startTime, lottery.endTime);
     }
 
     // JOIN LOTTERY
@@ -108,14 +112,14 @@ contract OmegaLottery is VRFConsumerBaseV2Plus
         Lottery storage lottery = lotteries[lotteryId];
 
         // enforce rules
-        //if (lotteryId == 0) revert LotteryDNE();
-        //if (block.timestamp < lottery.startTime) revert LotteryNotStarted();
-        //if (block.timestamp >= lottery.endTime) revert LotteryEnded();
-        //if (msg.value < lottery.entryFee) revert InsufficientFunds();
+        if (lotteryId == 0) revert LotteryDNE();
+        if (block.timestamp < lottery.startTime) revert LotteryNotStarted();
+        if (block.timestamp >= lottery.endTime) revert LotteryEnded();
+        if (msg.value < lottery.entryFee) revert InsufficientFunds();
         
         // check lottery state
-        //if (lottery.status == LotteryStatus.NOT_STARTED) { lottery.status = LotteryStatus.OPEN; }
-        //if (lottery.status != LotteryStatus.OPEN) revert LotteryNotOpen();
+        if (lottery.status == LotteryStatus.NOT_STARTED) { lottery.status = LotteryStatus.OPEN; }
+        if (lottery.status != LotteryStatus.OPEN) revert LotteryNotOpen();
 
         // update lottery state
         lotteryPlayers[lotteryId].push(msg.sender);
@@ -131,8 +135,8 @@ contract OmegaLottery is VRFConsumerBaseV2Plus
         Lottery storage lottery = lotteries[lotteryId];
 
         // enforce rules
-        //if (block.timestamp < lottery.endTime) revert LotteryNotStarted();
-        //if (lottery.status != LotteryStatus.OPEN) revert LotteryNotOpen();
+        //if (block.timestamp < lottery.endTime) revert LotteryNotEnded();
+        if (lottery.status != LotteryStatus.OPEN) revert LotteryNotOpen();
 
         // modify state
         lottery.status = LotteryStatus.DRAWING;
@@ -145,7 +149,7 @@ contract OmegaLottery is VRFConsumerBaseV2Plus
                 requestConfirmations: requestConfirmations,
                 callbackGasLimit: callbackGasLimit,
                 numWords: numWords,
-                extraArgs: VRFV2PlusClient._argsToBytes(VRFV2PlusClient.ExtraArgsV1({nativePayment: true}))
+                extraArgs: VRFV2PlusClient._argsToBytes(VRFV2PlusClient.ExtraArgsV1({nativePayment: false}))
             })
         );
 
@@ -161,8 +165,8 @@ contract OmegaLottery is VRFConsumerBaseV2Plus
         uint256 lotteryId = requestToLottery[requestId];
         Lottery storage lottery = lotteries[lotteryId];
 
-        require(lottery.status == LotteryStatus.DRAWING, "Not Drawing");
-
+        //require(lottery.status == LotteryStatus.DRAWING, "Not Drawing"); dont think i need this
+ 
         uint256 numPlayers = lotteryPlayers[lotteryId].length;
         if (numPlayers == 0) revert NotEnoughPlayers();
 
@@ -170,19 +174,23 @@ contract OmegaLottery is VRFConsumerBaseV2Plus
         address winnerAddress = lotteryPlayers[lotteryId][winnerIndex];
 
         lottery.winner = winnerAddress;
-        lottery.status = LotteryStatus.RESOLVED;
 
         // basic payout logic -> to be iterated upon
         (bool success, ) = winnerAddress.call{value: lottery.totalPot}("");
         require(success, "Transfer failed");
 
         // update lottery state
-        lotteries[lotteryId].status = LotteryStatus.CLOSED;
+        lotteries[lotteryId].status = LotteryStatus.RESOLVED;
     }
 
     // VIEW FUNCTIONS (for debugging/development)
     function getLottery(uint256 lotteryId) external view returns (Lottery memory)
     {
         return lotteries[lotteryId];
+    }
+
+    function getLotteryStatusById(uint256 lotteryId) external view returns (LotteryStatus status)
+    {
+        return lotteries[lotteryId].status;
     }
 }
