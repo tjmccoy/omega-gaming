@@ -20,6 +20,29 @@
   margin-top: 40px;
 }
 
+button {
+  padding: 16px 32px;
+  font-size: 18px;
+  font-weight: 600;
+  background-color: #103e72;
+  color: rgba(255, 255, 255, 0.87);
+  border: 2px solid #167aa8;
+  border-radius: 8px;
+  cursor: pointer;
+  margin: 10px;
+  transition: all 0.3s ease;
+}
+
+button:hover {
+  background-color: #167aa8;
+  transform: scale(1.05);
+}
+
+button:active {
+  transform: scale(0.95);
+}
+
+
 h2 {
   font-size: 32px;
   font-weight: 600;
@@ -43,9 +66,17 @@ h2 {
   margin: 20px 0;
 }
 
+.connect-wallet-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin: 40px 0;
+}
+
 @media (prefers-color-scheme: light) {
   :root {
     background-color: #f8f8f8;
     color: #181818;
   }
 }
+
