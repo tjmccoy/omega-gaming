@@ -43,11 +43,11 @@ contract OmegaLottery is VRFConsumerBaseV2Plus
     // TYPES
     enum LotteryStatus 
     {
-        NOT_STARTED,
-        OPEN,
-        CLOSED,
-        DRAWING,
-        RESOLVED
+        NOT_STARTED,    // 0
+        OPEN,           // 1
+        CLOSED,         // 2
+        DRAWING,        // 3
+        RESOLVED        // 4
     }
 
     struct Lottery 
@@ -58,7 +58,8 @@ contract OmegaLottery is VRFConsumerBaseV2Plus
         uint256 endTime;
         uint256 totalPot;
         LotteryStatus status;
-        address winner; // empty until lottery resolves
+        address winner;     // empty until lottery resolves
+        uint256 randomValue;    // store VRF response on chain so that it is auditable
     }
 
     // STORAGE
@@ -162,25 +163,47 @@ contract OmegaLottery is VRFConsumerBaseV2Plus
     // FULFILL RANDOM WORDS
     function fulfillRandomWords(uint256 requestId, uint256[] calldata randomWords) internal override 
     {
-        uint256 lotteryId = requestToLottery[requestId];
-        Lottery storage lottery = lotteries[lotteryId];
+        uint256 lotteryId = requestToLottery[requestId];    // get the lotteryId by the requestId
+        Lottery storage lottery = lotteries[lotteryId];     // lottery object
 
-        //require(lottery.status == LotteryStatus.DRAWING, "Not Drawing"); dont think i need this
- 
-        uint256 numPlayers = lotteryPlayers[lotteryId].length;
-        if (numPlayers == 0) revert NotEnoughPlayers();
+        // CHECKS
+        require(lottery.status == LotteryStatus.DRAWING, "Invalid state");
 
-        uint256 winnerIndex = randomWords[0] % numPlayers;
-        address winnerAddress = lotteryPlayers[lotteryId][winnerIndex];
+        // EFFECTS
+        uint256 randomValue = randomWords[0];
+        lottery.randomValue = randomValue;
+
+        selectWinner(lotteryId);
+
+        lottery.status = LotteryStatus.RESOLVED;
+        delete requestToLottery[requestId]; // keep storage clean and prevents replay attacks
+
+        // INTERACTIONS
+        payWinner(lotteryId);
+    }
+
+    // SELECT WINNER
+    function selectWinner(uint256 lotteryId) internal returns(address winnerAddress)
+    {
+        Lottery storage lottery = lotteries[lotteryId];     // lottery object
+
+        uint256 numPlayers = lotteryPlayers[lotteryId].length; // store number of players
+        if (numPlayers == 0) revert NotEnoughPlayers(); // make sure we have >= 1 player
+
+        uint256 winnerIndex = lottery.randomValue % numPlayers;
+        winnerAddress = lotteryPlayers[lotteryId][winnerIndex];
 
         lottery.winner = winnerAddress;
+    }
+    
+    // PAY WINNER
+    function payWinner(uint256 lotteryId) internal 
+    {
+        Lottery storage lottery = lotteries[lotteryId];
+        address winnerAddress = lottery.winner;
 
-        // basic payout logic -> to be iterated upon
-        (bool success, ) = winnerAddress.call{value: lottery.totalPot}("");
+        (bool success, ) = winnerAddress.call{value: lottery.totalPot}(""); // basic payout logic, to be iterated upon
         require(success, "Transfer failed");
-
-        // update lottery state
-        lotteries[lotteryId].status = LotteryStatus.RESOLVED;
     }
 
     // VIEW FUNCTIONS (for debugging/development)
