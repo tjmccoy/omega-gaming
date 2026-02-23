@@ -205,7 +205,7 @@ contract OmegaLottery is VRFConsumerBaseV2Plus
         (bool success, ) = winnerAddress.call{value: lottery.totalPot}(""); // basic payout logic, to be iterated upon
         require(success, "Transfer failed");
     }
-
+    
     // VIEW FUNCTIONS (for debugging/development)
     function getLottery(uint256 lotteryId) external view returns (Lottery memory)
     {
