@@ -7,10 +7,7 @@ const projectId = '044674d52beedf38eeaa78e0173f2102'
 export const config = createConfig({
   chains: [mainnet, base],
   connectors: [
-    injected(),
-    walletConnect({ projectId }),
     metaMask(),
-    safe(),
   ],
   transports: {
     [mainnet.id]: http(),

@@ -1,5 +1,6 @@
 'use client'
 
+import { useEffect, useState } from 'react'
 import { useConnect, useConnection, useConnectors, useDisconnect } from 'wagmi'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { WagmiProvider } from 'wagmi'
@@ -17,11 +18,31 @@ function ConnectWallet() {
   return <WalletOptions />
 }
 
+
 function App() {
   const connection = useConnection()
   const { connect, status, error } = useConnect()
   const connectors = useConnectors()
   const { disconnect } = useDisconnect()
+
+    const [timeRemaining, setTimeRemaining] = useState('')
+  
+  useEffect(() => {
+    const countDownDate = new Date("Feb 23, 2026 15:00:00").getTime();
+
+    const x = setInterval(function() {
+      const now = new Date().getTime();
+      const distance = countDownDate - now;
+
+      const hours = Math.floor((distance % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+      const minutes = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
+      const seconds = Math.floor((distance % (1000 * 60)) / 1000);
+
+      setTimeRemaining(` ${hours}h ${minutes}m ${seconds}s`);
+    }, 1000);
+
+    return () => clearInterval(x);
+  }, []);
 
   return (
 <>
@@ -46,7 +67,8 @@ function App() {
         <div className='squares-container'> 
           <div className='square'> Active Players </div>
           <div className='square'> Prize Pool </div>
-          <div className='square'> Time Remaining </div>
+          <div className='square'> Time Remaining <div>{timeRemaining}</div> 
+          </div>
         </div>
 
         
