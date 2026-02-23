@@ -4,11 +4,12 @@ pragma solidity ^0.8.30;
 // IMPORTS
 import {VRFConsumerBaseV2Plus} from "@chainlink/contracts/src/v0.8/vrf/dev/VRFConsumerBaseV2Plus.sol";
 import {VRFV2PlusClient} from "@chainlink/contracts/src/v0.8/vrf/dev/libraries/VRFV2PlusClient.sol";
+import {AutomationCompatibleInterface} from "@chainlink/contracts/src/v0.8/automation/AutomationCompatible.sol";
 
 import "@openzeppelin/contracts/utils/Strings.sol";
 
 // CONTRACT
-contract OmegaLottery is VRFConsumerBaseV2Plus
+contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface
 {
     using Strings for uint256;
 
@@ -84,7 +85,7 @@ contract OmegaLottery is VRFConsumerBaseV2Plus
         s_subscriptionId = 5381939440800401583750118558724030775370857736705249184581988840504175043599; //subscriptionId;
         keyHash = 0x787d74caea10b2b357790d5b5247c2f63d1d91572a9846f780606e4d953677ae; //_keyHash;
         lotteryIdCounter = 1;
-        callbackGasLimit = 100_000;
+        callbackGasLimit = 200_000;
         requestConfirmations = 3;
         numWords = 1;
     }
@@ -131,12 +132,12 @@ contract OmegaLottery is VRFConsumerBaseV2Plus
     }
 
     // REQUEST WINNER
-    function requestWinner(uint256 lotteryId) external onlyOwner returns(uint256 requestId)
+    function _requestWinner(uint256 lotteryId) internal returns(uint256 requestId)
     {
         Lottery storage lottery = lotteries[lotteryId];
 
         // enforce rules
-        //if (block.timestamp < lottery.endTime) revert LotteryNotEnded();
+        if (block.timestamp < lottery.endTime) revert LotteryNotEnded();
         if (lottery.status != LotteryStatus.OPEN) revert LotteryNotOpen();
 
         // modify state
@@ -215,5 +216,44 @@ contract OmegaLottery is VRFConsumerBaseV2Plus
     function getLotteryStatusById(uint256 lotteryId) external view returns (LotteryStatus status)
     {
         return lotteries[lotteryId].status;
+    }
+
+    // CHAINLINK AUTOMATION
+    function checkUpkeep(bytes calldata) external view override returns(bool upkeepNeeded, bytes memory performData)
+    {
+        uint256 currentLotteryId = lotteryIdCounter - 1;
+
+        if (currentLotteryId == 0) { return (false, bytes("")); }
+
+        Lottery memory lottery = lotteries[currentLotteryId];
+
+        bool timePassed = block.timestamp >= lottery.endTime;
+        bool isOpen = lottery.status == LotteryStatus.OPEN;
+        bool hasPlayers = lotteryPlayers[currentLotteryId].length > 0;
+
+        upkeepNeeded = (timePassed && isOpen && hasPlayers);
+        performData = abi.encode(currentLotteryId);
+    }
+
+    function performUpkeep(bytes calldata performData) external override
+    {
+        uint256 lotteryId = abi.decode(performData, (uint256));
+
+        Lottery storage lottery = lotteries[lotteryId];
+
+        bool timePassed = block.timestamp >= lottery.endTime;
+        bool isOpen = lottery.status == LotteryStatus.OPEN;
+        bool hasPlayers = lotteryPlayers[lotteryId].length > 0;
+
+        if (!(timePassed && isOpen && hasPlayers)) {
+            revert("Upkeep not needed");
+        }
+
+        _requestWinner(lotteryId);
+    }
+
+    function requestWinner(uint256 lotteryId) external onlyOwner returns(uint256)
+    {
+        return _requestWinner(lotteryId);
     }
 }
