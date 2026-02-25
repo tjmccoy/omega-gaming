@@ -13,6 +13,9 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface
 {
     using Strings for uint256;
 
+    // Treasury Address
+    address treasuryAddress = 0x3513808977b6362F9620Cf9dF0beA7FAd3f5571f;
+
     // ERRORS
     error InsufficientFunds();
     error InvalidEntryTime();
@@ -39,6 +42,21 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface
         uint256 indexed lotteryId,
         address indexed playerAddress,
         uint256 playerStake
+    );
+
+    event WinnerSelected
+    (
+        uint256 indexed lotteryId,
+        address indexed winnerAddress
+    );
+
+    event WinnerPaid
+    (
+        uint256 indexed lotteryId,
+        address indexed winnerAddress,
+        uint256 winnerPayout,
+        uint256 treasuryFee,
+        uint256 totalPot
     );
 
     // TYPES
@@ -80,7 +98,7 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface
     uint256 public lastRequestId;
     // END CHAINLINK VRF
 
-    /*
+    
     constructor() VRFConsumerBaseV2Plus(0x9DdfaCa8183c41ad55329BdeeD9F6A8d53168B1B)
     {
         s_subscriptionId = 5381939440800401583750118558724030775370857736705249184581988840504175043599; //subscriptionId;
@@ -90,8 +108,8 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface
         requestConfirmations = 3;
         numWords = 1;
     }
-    */
-
+    
+    /*
     constructor(uint256 subscriptionId, address vrfCoordinator, bytes32 _keyHash) VRFConsumerBaseV2Plus(vrfCoordinator)
     {
         s_subscriptionId = subscriptionId;
@@ -102,20 +120,22 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface
         requestConfirmations = 3;
         numWords = 1;
     }
-
+    */
     // LOTTERY CREATION
-    function createLottery(uint256 entryFee, uint256 startTime, uint256 endTime) external onlyOwner returns (uint256 lotteryId) 
+    function createLottery(uint256 entryFee/*, uint256 startTime, uint256 endTime*/) external onlyOwner returns (uint256 lotteryId) 
     {
         // enforce rules
-        if (startTime >= endTime) revert InvalidEntryTime();
+        //if (startTime >= endTime) revert InvalidEntryTime();
 
         lotteryId = lotteryIdCounter++;
 
         Lottery storage lottery = lotteries[lotteryId];
         lottery.id = lotteryId;
         lottery.entryFee = entryFee;
-        lottery.startTime = startTime;  // lottery.startTime = block.timestamp; //placeholder for testing
-        lottery.endTime = endTime;      // lottery.endTime = block.timestamp + 300;    // placeholder for testing -> 5 min after it starts
+        //lottery.startTime = startTime;
+        lottery.startTime = block.timestamp; // uncomment when testing  
+        //lottery.endTime = endTime;
+        lottery.endTime = block.timestamp + 300;    // uncomment when testing
         lottery.status = LotteryStatus.NOT_STARTED;
 
         emit LotteryCreated(lotteryId, entryFee, lottery.startTime, lottery.endTime);
@@ -208,6 +228,8 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface
         winnerAddress = lotteryPlayers[lotteryId][winnerIndex];
 
         lottery.winner = winnerAddress;
+
+        emit WinnerSelected(lotteryId, winnerAddress);
     }
     
     // PAY WINNER
@@ -215,9 +237,17 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface
     {
         Lottery storage lottery = lotteries[lotteryId];
         address winnerAddress = lottery.winner;
+        uint256 totalPot = lottery.totalPot;
+        uint256 winnerCut = (totalPot * 98) / 100;
+        uint256 treasuryCut = totalPot - winnerCut;
 
-        (bool success, ) = winnerAddress.call{value: lottery.totalPot}(""); // basic payout logic, to be iterated upon
-        require(success, "Transfer failed");
+        (bool winnerCall, ) = winnerAddress.call{value: winnerCut}("");
+        require(winnerCall, "Winner transfer failed");
+
+        (bool treasuryCall, ) = treasuryAddress.call{value: treasuryCut}("");
+        require(treasuryCall, "Treasury transfer failed");
+
+        emit WinnerPaid(lotteryId, winnerAddress, winnerCut, treasuryCut, totalPot);
     }
 
     // REQUEST WINNER

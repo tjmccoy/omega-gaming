@@ -16,6 +16,7 @@
 # production
 /build
 /artifacts
+.deploys
 
 # misc
 .DS_Store
@@ -27,7 +28,9 @@ yarn-debug.log*
 yarn-error.log*
 
 # local env files
-.env*.local
+.env
+.env.local
+.env.*
 
 # vercel
 .vercel
