@@ -1,23 +1,59 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import EnterForm from "./EnterForm";
 import LotteryHeader from "./LotteryHeader";
 import OwnerPanel from "./OwnerPanel";
 import PlayersList from "./PlayersList";
 import PotCard from "./PotCard";
-import { parseEther } from "viem";
-import { useAccount } from "wagmi";
+import StatusBar, { LotteryStatus } from "./StatusBar";
+import { useAccount, useReadContract } from "wagmi";
+import { OMEGA_LOTTERY_ABI } from "~~/constants/abi";
 import { useLottery } from "~~/hooks/useLottery";
-import { useOpenHours } from "~~/hooks/useOpenHours";
+
+const CONTRACT_ADDRESS = "0x256aA1F20fEFd5d8E8A4Eab916af17A36323eC97";
 
 export default function LotteryDapp() {
   const [mounted, setMounted] = useState(false);
   const { address: connectedAddress } = useAccount();
-  const { potBalance, players, isOwner, enter, pickWinner, isEntering, isPicking } = useLottery();
 
-  // isInitialized is our secret weapon against flickering
-  const { currentTime, isOpen, isClosingSoon, timeRemaining, isInitialized } = useOpenHours();
+  const { data: idCounter, refetch: refetchCounter } = useReadContract({
+    address: CONTRACT_ADDRESS,
+    abi: OMEGA_LOTTERY_ABI,
+    functionName: "lotteryIdCounter",
+  });
+
+  const activeLotteryId = useMemo(() => {
+    if (!idCounter || idCounter === 0n) return 1n;
+    return (idCounter as bigint) > 0n ? (idCounter as bigint) - 1n : 1n;
+  }, [idCounter]);
+
+  // --- INDEPENDENT OWNER CHECK (bypasses useLottery hook entirely) ---
+  const { data: rawOwnerAddress, isLoading: rawOwnerLoading } = useReadContract({
+    address: CONTRACT_ADDRESS,
+    abi: OMEGA_LOTTERY_ABI,
+    functionName: "owner",
+  });
+
+  const isOwnerDirect =
+    !rawOwnerLoading &&
+    !!connectedAddress &&
+    !!rawOwnerAddress &&
+    connectedAddress.toLowerCase() === (rawOwnerAddress as string).toLowerCase();
+
+  const {
+    lotteryData,
+    players,
+    winnerHistory,
+    treasuryBalance,
+    joinLottery,
+    requestWinner,
+    createNewLottery,
+    isJoining,
+    isRequesting,
+    isCreating,
+    refetchAll,
+  } = useLottery(activeLotteryId);
 
   const [entryAmount, setEntryAmount] = useState("0.02");
   const [showOwnerPanel, setShowOwnerPanel] = useState(false);
@@ -26,75 +62,92 @@ export default function LotteryDapp() {
     setMounted(true);
   }, []);
 
-  const isInvalid = Number(entryAmount) < 0.01 || isNaN(Number(entryAmount));
+  // Poll every 10 seconds — use refetchCounter from wagmi directly,
+  // and call refetchAll via a ref to avoid stale closure issues
+  const refetchAllRef = useRef(refetchAll);
+  useEffect(() => {
+    refetchAllRef.current = refetchAll;
+  }, [refetchAll]);
 
-  const handleEnter = async () => {
-    try {
-      await enter({ functionName: "enter", value: parseEther(entryAmount) });
-    } catch (e) {
-      console.error(e);
-    }
-  };
+  useEffect(() => {
+    const interval = setInterval(() => {
+      refetchAllRef.current();
+      refetchCounter();
+    }, 10000);
+    return () => clearInterval(interval);
+  }, [refetchCounter]);
 
-  const handlePickWinner = async () => {
-    try {
-      await pickWinner({ functionName: "chooseWinner" });
-    } catch (e) {
-      console.error(e);
-    }
-  };
+  const status = (lotteryData?.status as LotteryStatus) ?? LotteryStatus.NOT_STARTED;
+
+  // The contract auto-transitions NOT_STARTED → OPEN on first join,
+  // so we allow entry if the lottery is NOT_STARTED or OPEN and within the time window.
+  const now = Math.floor(Date.now() / 1000);
+  const startTime = Number(lotteryData?.startTime ?? 0n);
+  const endTime = Number(lotteryData?.endTime ?? 0n);
+  const isEntryAllowed =
+    (status === LotteryStatus.NOT_STARTED || status === LotteryStatus.OPEN) && now >= startTime && now < endTime;
+
+  const isOpen = status === LotteryStatus.OPEN;
+  const minEntry = lotteryData ? Number(lotteryData.entryFee) / 1e18 : 0.01;
+  const isInvalidAmount = Number(entryAmount) < minEntry || isNaN(Number(entryAmount));
+
+  if (!mounted) return null;
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-50 font-sans selection:bg-yellow-500/30">
-      <LotteryHeader address={mounted ? connectedAddress : undefined} />
+    <div className="min-h-screen bg-slate-950 text-slate-50 font-sans">
+      <LotteryHeader address={connectedAddress} />
 
       <main className="max-w-4xl mx-auto px-4 py-8 space-y-6">
-        {/* Status Section */}
-        <div className="min-h-[82px]">
-          {!isInitialized ? (
-            // The Skeleton: Shown while calculating the true state
-            <div className="w-full h-[74px] bg-slate-900/40 rounded-xl border border-slate-800 animate-pulse flex items-center px-4">
-              <div className="w-2.5 h-2.5 rounded-full bg-slate-700 mr-4" />
-              <div className="flex-1 space-y-2">
-                <div className="h-2 w-20 bg-slate-700 rounded" />
-                <div className="h-3 w-32 bg-slate-800 rounded" />
-              </div>
-            </div>
-          ) : (
-            // The Real Card: Transitions in only when the status is 100% certain
-            <div className="animate-in fade-in duration-300">
-              <PotCard
-                potBalance={potBalance}
-                currentTime={currentTime}
-                isOpen={!!isOpen}
-                isClosingSoon={isClosingSoon}
-                timeRemaining={timeRemaining}
-              />
-            </div>
-          )}
-        </div>
+        <StatusBar
+          status={status}
+          timeRemaining={""}
+          startTime={lotteryData?.startTime}
+          endTime={lotteryData?.endTime}
+        />
+
+        <PotCard
+          potBalance={lotteryData?.totalPot ?? 0n}
+          status={status}
+          startTime={lotteryData?.startTime ?? 0n}
+          endTime={lotteryData?.endTime ?? 0n}
+          winner={lotteryData?.winner}
+        />
 
         <EnterForm
           entryAmount={entryAmount}
           setEntryAmount={setEntryAmount}
-          onEnter={handleEnter}
-          // Strict check: disable button if not initialized or if closed
-          disabled={!isInitialized || isEntering || isInvalid || !isOpen}
-          isEntering={isEntering}
-          isInvalid={isInvalid}
-          isOpen={!!isOpen}
+          onEnter={async () => {
+            await joinLottery(entryAmount);
+          }}
+          disabled={isJoining || isInvalidAmount || !isEntryAllowed}
+          isEntering={isJoining}
+          isInvalid={isInvalidAmount}
+          isOpen={isOpen}
+          minEntry={minEntry}
         />
 
         <PlayersList players={players} connectedAddress={connectedAddress} />
 
-        {isOwner && (
-          <OwnerPanel
-            show={showOwnerPanel}
-            toggle={() => setShowOwnerPanel(b => !b)}
-            onPick={handlePickWinner}
-            isPicking={isPicking}
-            hasPlayers={!!players && players.length > 0}
-          />
+        {isOwnerDirect && (
+          <div className="mt-12 pt-8 border-t border-slate-900/50">
+            <OwnerPanel
+              show={showOwnerPanel}
+              toggle={() => setShowOwnerPanel(prev => !prev)}
+              onPick={async () => {
+                await requestWinner();
+              }}
+              onCreate={async (f, s, e) => {
+                await createNewLottery(f, s, e);
+                refetchCounter();
+                refetchAll();
+              }}
+              isPicking={isRequesting}
+              isCreating={isCreating}
+              status={status}
+              treasuryBalance={treasuryBalance}
+              winnerHistory={winnerHistory}
+            />
+          </div>
         )}
       </main>
     </div>
