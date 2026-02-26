@@ -10,6 +10,7 @@ interface EnterFormProps {
   isEntering: boolean;
   isInvalid: boolean;
   isOpen: boolean;
+  minEntry: number;
 }
 
 export default function EnterForm({
@@ -20,7 +21,10 @@ export default function EnterForm({
   isEntering,
   isInvalid,
   isOpen,
+  minEntry,
 }: EnterFormProps) {
+  const minEntryDisplay = minEntry.toFixed(4).replace(/\.?0+$/, "") || "0";
+
   return (
     <div className="rounded-xl border border-slate-800 bg-slate-900 p-6 shadow-lg">
       <div className="flex items-center gap-3 mb-6">
@@ -39,6 +43,7 @@ export default function EnterForm({
               id="amount"
               type="number"
               step="0.01"
+              min={minEntry}
               value={entryAmount}
               onChange={e => setEntryAmount(e.target.value)}
               className={`w-full bg-slate-950 border rounded-lg h-12 px-4 text-lg text-white transition-all outline-none
@@ -56,11 +61,11 @@ export default function EnterForm({
               <div className="flex items-center gap-1.5 animate-in fade-in duration-300 bg-red-500/10 border border-red-500/30 rounded-lg px-3 py-2 w-full">
                 <AlertCircle className="w-4 h-4 text-red-500 drop-shadow-[0_0_8px_rgba(239,68,68,0.8)]" />
                 <p className="text-xs font-black text-red-500 drop-shadow-[0_0_15px_rgba(239,68,68,1)] tracking-widest uppercase">
-                  Minimum entry: 0.01 ETH required
+                  Minimum entry: {minEntryDisplay} ETH required
                 </p>
               </div>
             ) : (
-              <p className="text-xs font-bold text-white tracking-wide">Minimum entry: 0.01 ETH</p>
+              <p className="text-xs font-bold text-white tracking-wide">Minimum entry: {minEntryDisplay} ETH</p>
             )}
           </div>
         </div>
