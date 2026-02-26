@@ -13,7 +13,7 @@ import {AutomationCompatibleInterface} from "@chainlink/contracts/src/v0.8/autom
 import "@openzeppelin/contracts/utils/Strings.sol";
 
 // CONTRACT
-contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface
+contract TestOmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface
 {
     using Strings for uint256;
 

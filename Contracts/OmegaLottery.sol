@@ -14,11 +14,12 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface
     using Strings for uint256;
 
     // Treasury Address
-    address treasuryAddress = 0x3513808977b6362F9620Cf9dF0beA7FAd3f5571f;
+    address _treasuryAddress;
 
     // ERRORS
     error InsufficientFunds();
     error InvalidEntryTime();
+    error InvalidTreasuryAddress();
 
     error LotteryDNE();
     error LotteryEnded();
@@ -59,6 +60,12 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface
         uint256 totalPot
     );
 
+    event TreasuryUpdated
+    (
+        address oldTreasury,
+        address newTreasury
+    );
+
     // TYPES
     enum LotteryStatus 
     {
@@ -96,20 +103,7 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface
 
     mapping(uint256 => uint256) public requestToLottery;    // requestId => lotteryId
     uint256 public lastRequestId;
-    // END CHAINLINK VRF
-
     
-    constructor() VRFConsumerBaseV2Plus(0x9DdfaCa8183c41ad55329BdeeD9F6A8d53168B1B)
-    {
-        s_subscriptionId = 5381939440800401583750118558724030775370857736705249184581988840504175043599; //subscriptionId;
-        keyHash = 0x787d74caea10b2b357790d5b5247c2f63d1d91572a9846f780606e4d953677ae; //_keyHash;
-        lotteryIdCounter = 1;
-        callbackGasLimit = 200_000;
-        requestConfirmations = 3;
-        numWords = 1;
-    }
-    
-    /*
     constructor(uint256 subscriptionId, address vrfCoordinator, bytes32 _keyHash) VRFConsumerBaseV2Plus(vrfCoordinator)
     {
         s_subscriptionId = subscriptionId;
@@ -120,22 +114,20 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface
         requestConfirmations = 3;
         numWords = 1;
     }
-    */
+    
     // LOTTERY CREATION
-    function createLottery(uint256 entryFee/*, uint256 startTime, uint256 endTime*/) external onlyOwner returns (uint256 lotteryId) 
+    function createLottery(uint256 entryFee, uint256 startTime, uint256 endTime) external onlyOwner returns (uint256 lotteryId) 
     {
         // enforce rules
-        //if (startTime >= endTime) revert InvalidEntryTime();
+        if (startTime >= endTime) revert InvalidEntryTime();
 
         lotteryId = lotteryIdCounter++;
 
         Lottery storage lottery = lotteries[lotteryId];
         lottery.id = lotteryId;
         lottery.entryFee = entryFee;
-        //lottery.startTime = startTime;
-        lottery.startTime = block.timestamp; // uncomment when testing  
-        //lottery.endTime = endTime;
-        lottery.endTime = block.timestamp + 300;    // uncomment when testing
+        lottery.startTime = startTime;
+        lottery.endTime = endTime;
         lottery.status = LotteryStatus.NOT_STARTED;
 
         emit LotteryCreated(lotteryId, entryFee, lottery.startTime, lottery.endTime);
@@ -244,7 +236,7 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface
         (bool winnerCall, ) = winnerAddress.call{value: winnerCut}("");
         require(winnerCall, "Winner transfer failed");
 
-        (bool treasuryCall, ) = treasuryAddress.call{value: treasuryCut}("");
+        (bool treasuryCall, ) = _treasuryAddress.call{value: treasuryCut}("");
         require(treasuryCall, "Treasury transfer failed");
 
         emit WinnerPaid(lotteryId, winnerAddress, winnerCut, treasuryCut, totalPot);
@@ -290,6 +282,15 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface
         _requestWinner(lotteryId);
     }
     
+    // TREASURY
+    function setTreasury(address newTreasury) external onlyOwner 
+    {
+        if (newTreasury == address(0)) revert InvalidTreasuryAddress();
+
+        emit TreasuryUpdated(_treasuryAddress, newTreasury);
+        _treasuryAddress = newTreasury;
+    }
+
     // VIEW FUNCTIONS (for debugging/development)
     function getLottery(uint256 lotteryId) external view returns (Lottery memory lottery)
     {
@@ -299,5 +300,15 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface
     function getLotteryStatusById(uint256 lotteryId) external view returns (LotteryStatus status)
     {
         return lotteries[lotteryId].status;
+    }
+
+    function getTreasuryAddress() external view returns (address)
+    {
+        return _treasuryAddress;
+    }
+
+    function getPlayersByLotteryId(uint256 lotteryId) external view returns (address[] memory players)
+    {
+        return lotteryPlayers[lotteryId];
     }
 }
