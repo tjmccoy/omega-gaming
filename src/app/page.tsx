@@ -1,15 +1,59 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import {useReadContract} from 'wagmi'
 import { useConnect, useConnection, useConnectors, useDisconnect } from 'wagmi'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { WagmiProvider } from 'wagmi'
 import { config } from '../../config'
 import { Connection } from './connection'
 import { WalletOptions } from './wallet-options'
+import { LOTTERY_ABI } from './lotteryAbi'
 
 
 const queryClient = new QueryClient()
+const LOTTERY_ADDRESS = '0xYourLotteryContractAddress' 
+const CURRENT_ID = 1n
+
+function CountdownTimer() {
+  const [timeRemaining, setTimeRemaining] = useState('')
+  
+  // Read lottery data from contract
+  const { data: lottery } = useReadContract({
+    address: LOTTERY_ADDRESS,
+    abi: LOTTERY_ABI,
+    functionName: 'getLottery',
+    args: [CURRENT_ID],
+  })
+
+  useEffect(() => {
+    if (!lottery?.endTime) return
+
+    const countDownDate = Number(lottery.endTime) * 1000 // Convert from seconds to milliseconds
+
+    const x = setInterval(function() {
+      const now = new Date().getTime()
+      const distance = countDownDate - now
+
+      if (distance < 0) {
+        setTimeRemaining('Lottery Ended')
+        clearInterval(x)
+        return
+      }
+
+      const hours = Math.floor((distance % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60))
+      const minutes = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60))
+      const seconds = Math.floor((distance % (1000 * 60)) / 1000)
+
+      setTimeRemaining(`${hours}h ${minutes}m ${seconds}s`)
+    }, 1000)
+
+    return () => clearInterval(x)
+  }, [lottery?.endTime])
+
+  return <div>{timeRemaining}</div>
+}
+
 
 
 function ConnectWallet() {
@@ -28,7 +72,7 @@ function App() {
     const [timeRemaining, setTimeRemaining] = useState('')
   
   useEffect(() => {
-    const countDownDate = new Date("Feb 23, 2026 15:00:00").getTime();
+    const countDownDate = new Date("Feb 25, 2026 15:00:00").getTime();
 
     const x = setInterval(function() {
       const now = new Date().getTime();
@@ -67,10 +111,14 @@ function App() {
         <div className='squares-container'> 
           <div className='square'> Active Players </div>
           <div className='square'> Prize Pool </div>
-          <div className='square'> Time Remaining <div>{timeRemaining}</div> 
+          <div className='square'> Time Remaining 
+            <CountdownTimer/>
           </div>
         </div>
 
+      <div className='lottery_join'>
+      <button>Join Current Lottery </button>
+      </div>
         
 
       </div>
