@@ -14,16 +14,20 @@ contract OmegaLotteryTest {
     address acc2;
 
     uint256 constant ENTRY_FEE = 1 ether;
-
+    uint256 constant DURATION = 1 days;
+ 
     function beforeAll() public {
         acc0 = TestsAccounts.getAccount(0); // owner
         acc1 = TestsAccounts.getAccount(1);
         acc2 = TestsAccounts.getAccount(2);
 
         lottery = new OmegaLottery(
+            address(acc0),
             1,                  // dummy subscriptionId
             address(this),      // dummy VRF coordinator
-            bytes32("keyhash")  // dummy keyhash
+            bytes32("keyhash"),  // dummy keyhash,
+            ENTRY_FEE,
+            DURATION
         );
     }
 
@@ -35,11 +39,11 @@ contract OmegaLotteryTest {
         uint256 start = block.timestamp + 10;
         uint256 end = block.timestamp + 100;
 
-        uint256 lotteryId = lottery.createLottery(ENTRY_FEE, start, end);
+        lottery.createLottery(ENTRY_FEE, start, end);
 
-        OmegaLottery.Lottery memory lotteryObj = lottery.getLottery(lotteryId);
+        OmegaLottery.Lottery memory lotteryObj = lottery.getLottery(1);
 
-        Assert.equal(lotteryId, 1, "Lottery ID should be 1");
+        Assert.equal(lotteryObj.id, 1, "Lottery ID should be 1");
         Assert.equal(lotteryObj.entryFee, ENTRY_FEE, "Entry Fee should == 1 ether");
     }
 
