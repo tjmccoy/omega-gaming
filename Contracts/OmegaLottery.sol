@@ -125,40 +125,6 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface
         // immediately create first lottery
         _createLotteryWithDuration();
     }
-    
-    // LOTTERY CREATION
-    function createLottery(uint256 entryFee, uint256 startTime, uint256 endTime) external onlyOwner returns (uint256 lotteryId) 
-    {
-        // enforce rules
-        if (startTime >= endTime) revert InvalidEntryTime();
-
-        lotteryId = lotteryIdCounter++;
-
-        Lottery storage lottery = lotteries[lotteryId];
-        lottery.id = lotteryId;
-        lottery.entryFee = entryFee;
-        lottery.startTime = startTime;
-        lottery.endTime = endTime;
-        lottery.status = LotteryStatus.OPEN;
-
-        emit LotteryCreated(lotteryId, entryFee, lottery.startTime, lottery.endTime);
-    }
-
-    function _createLotteryWithDuration() internal {
-        uint256 lotteryId = lotteryIdCounter++;
-
-        uint256 startTime = block.timestamp;
-        uint256 endTime = block.timestamp + lotteryDuration;
-
-        Lottery storage lottery = lotteries[lotteryId];
-        lottery.id = lotteryId;
-        lottery.entryFee = defaultEntryFee;
-        lottery.startTime = startTime;
-        lottery.endTime = endTime;
-        lottery.status = LotteryStatus.OPEN;
-
-        emit LotteryCreated(lotteryId, defaultEntryFee, startTime, endTime);
-    }
 
     // JOIN LOTTERY
     function joinLottery(uint256 lotteryId) external payable
@@ -180,6 +146,23 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface
 
         // send event to frontend
         emit LotteryEntered(lotteryId, msg.sender, msg.value);
+    }
+    
+    // LOTTERY CREATION
+    function _createLotteryWithDuration() internal {
+        uint256 lotteryId = lotteryIdCounter++;
+
+        uint256 startTime = block.timestamp;
+        uint256 endTime = block.timestamp + lotteryDuration;
+
+        Lottery storage lottery = lotteries[lotteryId];
+        lottery.id = lotteryId;
+        lottery.entryFee = defaultEntryFee;
+        lottery.startTime = startTime;
+        lottery.endTime = endTime;
+        lottery.status = LotteryStatus.OPEN;
+
+        emit LotteryCreated(lotteryId, defaultEntryFee, startTime, endTime);
     }
 
     // REQUEST WINNER
@@ -266,12 +249,6 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface
         _createLotteryWithDuration();
     }
 
-    // REQUEST WINNER
-    function requestWinner(uint256 lotteryId) external onlyOwner
-    {
-        _requestWinner(lotteryId);
-    }
-
     // CHAINLINK AUTOMATION
     function checkUpkeep(bytes calldata) external view override returns(bool upkeepNeeded, bytes memory performData)
     {
@@ -343,7 +320,7 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface
     {
         return lotteryPlayers[lotteryId];
     }
-
+    
     // Returns all VRF-related data for a given lottery so users can independently verify the randomness used to select the winner. 
     // Including:
     // requestId (to locate the fulfillment transaction and proof on-chain), 
@@ -353,5 +330,23 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface
     {
         Lottery memory lottery = lotteries[lotteryId];
         return (lottery.requestId, lottery.randomValue, keyHash, s_subscriptionId);
+    }
+
+    // Scheduled for Removal:
+    function createLottery(uint256 entryFee, uint256 startTime, uint256 endTime) external onlyOwner returns (uint256 lotteryId) 
+    {
+        // enforce rules
+        if (startTime >= endTime) revert InvalidEntryTime();
+
+        lotteryId = lotteryIdCounter++;
+
+        Lottery storage lottery = lotteries[lotteryId];
+        lottery.id = lotteryId;
+        lottery.entryFee = entryFee;
+        lottery.startTime = startTime;
+        lottery.endTime = endTime;
+        lottery.status = LotteryStatus.OPEN;
+
+        emit LotteryCreated(lotteryId, entryFee, lottery.startTime, lottery.endTime);
     }
 }
