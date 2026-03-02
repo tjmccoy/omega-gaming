@@ -28,6 +28,10 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface
     error LotteryNotStarted();
 
     error NotEnoughPlayers();
+
+    // Lottery Creation Automation
+    uint256 public immutable lotteryDuration;
+    uint256 public immutable defaultEntryFee;
     
     // EVENTS
     event LotteryCreated
@@ -69,11 +73,9 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface
     // TYPES
     enum LotteryStatus 
     {
-        NOT_STARTED,    // 0
-        OPEN,           // 1
-        CLOSED,         // 2
-        DRAWING,        // 3
-        RESOLVED        // 4
+        OPEN,           // 0
+        DRAWING,        // 1
+        RESOLVED        // 2
     }
 
     struct Lottery 
@@ -86,6 +88,7 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface
         LotteryStatus status;
         address winner;     // empty until lottery resolves
         uint256 randomValue;    // store VRF response on chain so that it is auditable
+        uint256 requestId;
     }
 
     // STORAGE
@@ -104,8 +107,10 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface
     mapping(uint256 => uint256) public requestToLottery;    // requestId => lotteryId
     uint256 public lastRequestId;
     
-    constructor(uint256 subscriptionId, address vrfCoordinator, bytes32 _keyHash) VRFConsumerBaseV2Plus(vrfCoordinator)
+    constructor(address treasuryAddress, uint256 subscriptionId, address vrfCoordinator, bytes32 _keyHash, uint256 _defaultEntryFee, uint256 _lotteryDuration) VRFConsumerBaseV2Plus(vrfCoordinator)
     {
+        _treasuryAddress = treasuryAddress;
+
         s_subscriptionId = subscriptionId;
         keyHash = _keyHash;
 
@@ -113,6 +118,12 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface
         callbackGasLimit = 200_000;
         requestConfirmations = 3;
         numWords = 1;
+
+        defaultEntryFee = _defaultEntryFee;
+        lotteryDuration = _lotteryDuration;
+
+        // immediately create first lottery
+        _createLotteryWithDuration();
     }
     
     // LOTTERY CREATION
@@ -128,9 +139,25 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface
         lottery.entryFee = entryFee;
         lottery.startTime = startTime;
         lottery.endTime = endTime;
-        lottery.status = LotteryStatus.NOT_STARTED;
+        lottery.status = LotteryStatus.OPEN;
 
         emit LotteryCreated(lotteryId, entryFee, lottery.startTime, lottery.endTime);
+    }
+
+    function _createLotteryWithDuration() internal {
+        uint256 lotteryId = lotteryIdCounter++;
+
+        uint256 startTime = block.timestamp;
+        uint256 endTime = block.timestamp + lotteryDuration;
+
+        Lottery storage lottery = lotteries[lotteryId];
+        lottery.id = lotteryId;
+        lottery.entryFee = defaultEntryFee;
+        lottery.startTime = startTime;
+        lottery.endTime = endTime;
+        lottery.status = LotteryStatus.OPEN;
+
+        emit LotteryCreated(lotteryId, defaultEntryFee, startTime, endTime);
     }
 
     // JOIN LOTTERY
@@ -145,7 +172,6 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface
         if (msg.value < lottery.entryFee) revert InsufficientFunds();
         
         // check lottery state
-        if (lottery.status == LotteryStatus.NOT_STARTED) { lottery.status = LotteryStatus.OPEN; }
         if (lottery.status != LotteryStatus.OPEN) revert LotteryNotOpen();
 
         // update lottery state
@@ -157,18 +183,14 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface
     }
 
     // REQUEST WINNER
-    function _requestWinner(uint256 lotteryId) internal returns(uint256 requestId)
+    function _requestWinner(uint256 lotteryId) internal
     {
         Lottery storage lottery = lotteries[lotteryId];
-
-        // enforce rules
-        if (block.timestamp < lottery.endTime) revert LotteryNotEnded();
-        if (lottery.status != LotteryStatus.OPEN) revert LotteryNotOpen();
 
         // modify state
         lottery.status = LotteryStatus.DRAWING;
 
-        requestId = s_vrfCoordinator.requestRandomWords(
+        uint256 requestId = s_vrfCoordinator.requestRandomWords(
             VRFV2PlusClient.RandomWordsRequest(
             {
                 keyHash: keyHash,
@@ -182,8 +204,7 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface
 
         requestToLottery[requestId] = lotteryId;
         lastRequestId = requestId;
-
-        return requestId;
+        lottery.requestId = requestId;  // used to verify VRF response on-chain
     }
 
     // FULFILL RANDOM WORDS
@@ -240,12 +261,15 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface
         require(treasuryCall, "Treasury transfer failed");
 
         emit WinnerPaid(lotteryId, winnerAddress, winnerCut, treasuryCut, totalPot);
+        delete lotteryPlayers[lotteryId];
+
+        _createLotteryWithDuration();
     }
 
     // REQUEST WINNER
-    function requestWinner(uint256 lotteryId) external onlyOwner returns(uint256)
+    function requestWinner(uint256 lotteryId) external onlyOwner
     {
-        return _requestWinner(lotteryId);
+        _requestWinner(lotteryId);
     }
 
     // CHAINLINK AUTOMATION
@@ -259,26 +283,34 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface
 
         bool timePassed = block.timestamp >= lottery.endTime;
         bool isOpen = lottery.status == LotteryStatus.OPEN;
-        bool hasPlayers = lotteryPlayers[currentLotteryId].length > 0;
 
-        upkeepNeeded = (timePassed && isOpen && hasPlayers);    // if true, performUpkeep fires off
-        performData = abi.encode(currentLotteryId);             // data to be used in performUpkeep
+        upkeepNeeded = (timePassed && isOpen);    // if true, performUpkeep fires off
+        performData = abi.encode(currentLotteryId); // data to be used in performUpkeep
     }
 
-    function performUpkeep(bytes calldata performData) external override
-    {
+    function performUpkeep(bytes calldata performData) external override {
         uint256 lotteryId = abi.decode(performData, (uint256));
 
         Lottery storage lottery = lotteries[lotteryId];
 
         bool timePassed = block.timestamp >= lottery.endTime;
         bool isOpen = lottery.status == LotteryStatus.OPEN;
-        bool hasPlayers = lotteryPlayers[lotteryId].length > 0;
 
-        if (!(timePassed && isOpen && hasPlayers)) {
+        if (!(timePassed && isOpen)) {
             revert("Upkeep not needed");
         }
 
+        uint256 playerCount = lotteryPlayers[lotteryId].length;
+
+        // automatically rollover if no players joined the lottery
+        if (playerCount == 0) {
+            lottery.status = LotteryStatus.RESOLVED;
+
+            _createLotteryWithDuration();
+            return;
+        }
+
+        // otherwise, request randomness
         _requestWinner(lotteryId);
     }
     
@@ -291,7 +323,7 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface
         _treasuryAddress = newTreasury;
     }
 
-    // VIEW FUNCTIONS (for debugging/development)
+    // VIEW FUNCTIONS
     function getLottery(uint256 lotteryId) external view returns (Lottery memory lottery)
     {
         return lotteries[lotteryId];
@@ -310,5 +342,16 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface
     function getPlayersByLotteryId(uint256 lotteryId) external view returns (address[] memory players)
     {
         return lotteryPlayers[lotteryId];
+    }
+
+    // Returns all VRF-related data for a given lottery so users can independently verify the randomness used to select the winner. 
+    // Including:
+    // requestId (to locate the fulfillment transaction and proof on-chain), 
+    // randomValue, 
+    // & the VRF configuration parameters used for the request.
+    function getRandomnessDetails(uint256 lotteryId) external view returns (uint256 requestId, uint256 randomValue, bytes32 vrfKeyHash, uint256 subscriptionId)
+    {
+        Lottery memory lottery = lotteries[lotteryId];
+        return (lottery.requestId, lottery.randomValue, keyHash, s_subscriptionId);
     }
 }
