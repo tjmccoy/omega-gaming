@@ -5,11 +5,12 @@ pragma solidity ^0.8.30;
 import {VRFConsumerBaseV2Plus} from "@chainlink/contracts/src/v0.8/vrf/dev/VRFConsumerBaseV2Plus.sol";
 import {VRFV2PlusClient} from "@chainlink/contracts/src/v0.8/vrf/dev/libraries/VRFV2PlusClient.sol";
 import {AutomationCompatibleInterface} from "@chainlink/contracts/src/v0.8/automation/AutomationCompatible.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 
 import "@openzeppelin/contracts/utils/Strings.sol";
 
 // CONTRACT
-contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface
+contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, ReentrancyGuard
 {
     using Strings for uint256;
 
@@ -70,6 +71,13 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface
         address newTreasury
     );
 
+    event RefundedPlayer
+    (
+        uint256 indexed lotteryId, 
+        address indexed player, 
+        uint256 amount
+    );
+
     // TYPES
     enum LotteryStatus 
     {
@@ -95,6 +103,7 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface
     uint256 public lotteryIdCounter;    // incrementing lottery ID. starts @ 1
     mapping(uint256 => Lottery) internal lotteries; // lotteryId => Lottery 
     mapping(uint256 => address[]) internal lotteryPlayers;  // lotteryId => players
+    mapping(uint256 => mapping(address => uint256)) internal playerStakes;
 
     // CHAINLINK VRF
     uint256 public s_subscriptionId;
@@ -143,6 +152,9 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface
         // update lottery state
         lotteryPlayers[lotteryId].push(msg.sender);
         lottery.totalPot += msg.value;
+
+        // keep track of how much each player deposits in case of refund
+        playerStakes[lotteryId][msg.sender] += msg.value;
 
         // send event to frontend
         emit LotteryEntered(lotteryId, msg.sender, msg.value);
@@ -245,6 +257,40 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface
 
         emit WinnerPaid(lotteryId, winnerAddress, winnerCut, treasuryCut, totalPot);
         delete lotteryPlayers[lotteryId];
+
+        _createLotteryWithDuration();
+    }
+
+    // REFUND ALL
+    function refundAll(uint256 lotteryId) external onlyOwner nonReentrant {
+        Lottery storage lottery = lotteries[lotteryId];
+
+        if (lottery.status == LotteryStatus.OPEN) revert LotteryNotEnded();
+        if (lottery.status == LotteryStatus.RESOLVED) revert LotteryEnded();
+
+        address[] storage players = lotteryPlayers[lotteryId];
+        uint256 playerCount = players.length;
+
+        require(playerCount > 0, "No players to refund");
+
+        lottery.status = LotteryStatus.RESOLVED; // prevent reentry
+
+        for (uint256 i = 0; i < playerCount; i++) {
+            address player = players[i];
+            uint256 stake = playerStakes[lotteryId][player];
+
+            if (stake > 0) {
+                playerStakes[lotteryId][player] = 0;
+
+                (bool success, ) = player.call{value: stake}("");
+                require(success, "Refund failed");
+
+                emit RefundedPlayer(lotteryId, player, stake);
+            }
+        }
+
+        delete lotteryPlayers[lotteryId];
+        lottery.totalPot = 0;
 
         _createLotteryWithDuration();
     }
