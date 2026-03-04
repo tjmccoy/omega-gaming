@@ -78,6 +78,12 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
         uint256 amount
     );
 
+    event LotteryStatusUpdated
+    (
+        uint256 indexed lotteryId,
+        LotteryStatus lotteryStatus
+    );
+
     // TYPES
     enum LotteryStatus 
     {
@@ -174,6 +180,7 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
         lottery.endTime = endTime;
         lottery.status = LotteryStatus.OPEN;
 
+        emit LotteryStatusUpdated(lotteryId, lottery.status);
         emit LotteryCreated(lotteryId, defaultEntryFee, startTime, endTime);
     }
 
@@ -184,6 +191,7 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
 
         // modify state
         lottery.status = LotteryStatus.DRAWING;
+        emit LotteryStatusUpdated(lotteryId, lottery.status);
 
         uint256 requestId = s_vrfCoordinator.requestRandomWords(
             VRFV2PlusClient.RandomWordsRequest(
@@ -218,6 +226,8 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
         selectWinner(lotteryId);
 
         lottery.status = LotteryStatus.RESOLVED;
+        emit LotteryStatusUpdated(lotteryId, lottery.status);
+
         delete requestToLottery[requestId]; // keep storage clean and prevents replay attacks
 
         // INTERACTIONS
@@ -257,40 +267,6 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
 
         emit WinnerPaid(lotteryId, winnerAddress, winnerCut, treasuryCut, totalPot);
         delete lotteryPlayers[lotteryId];
-
-        _createLotteryWithDuration();
-    }
-
-    // REFUND ALL
-    function refundAll(uint256 lotteryId) external onlyOwner nonReentrant {
-        Lottery storage lottery = lotteries[lotteryId];
-
-        if (lottery.status == LotteryStatus.OPEN) revert LotteryNotEnded();
-        if (lottery.status == LotteryStatus.RESOLVED) revert LotteryEnded();
-
-        address[] storage players = lotteryPlayers[lotteryId];
-        uint256 playerCount = players.length;
-
-        require(playerCount > 0, "No players to refund");
-
-        lottery.status = LotteryStatus.RESOLVED; // prevent reentry
-
-        for (uint256 i = 0; i < playerCount; i++) {
-            address player = players[i];
-            uint256 stake = playerStakes[lotteryId][player];
-
-            if (stake > 0) {
-                playerStakes[lotteryId][player] = 0;
-
-                (bool success, ) = player.call{value: stake}("");
-                require(success, "Refund failed");
-
-                emit RefundedPlayer(lotteryId, player, stake);
-            }
-        }
-
-        delete lotteryPlayers[lotteryId];
-        lottery.totalPot = 0;
 
         _createLotteryWithDuration();
     }
@@ -378,21 +354,38 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
         return (lottery.requestId, lottery.randomValue, keyHash, s_subscriptionId);
     }
 
-    // Scheduled for Removal:
-    function createLottery(uint256 entryFee, uint256 startTime, uint256 endTime) external onlyOwner returns (uint256 lotteryId) 
-    {
-        // enforce rules
-        if (startTime >= endTime) revert InvalidEntryTime();
-
-        lotteryId = lotteryIdCounter++;
-
+    // ADMIN INTERVENTION (WIP)
+    // REFUND ALL
+    function refundAll(uint256 lotteryId) external onlyOwner nonReentrant {
         Lottery storage lottery = lotteries[lotteryId];
-        lottery.id = lotteryId;
-        lottery.entryFee = entryFee;
-        lottery.startTime = startTime;
-        lottery.endTime = endTime;
-        lottery.status = LotteryStatus.OPEN;
 
-        emit LotteryCreated(lotteryId, entryFee, lottery.startTime, lottery.endTime);
+        if (lottery.status == LotteryStatus.OPEN) revert LotteryNotEnded();
+        if (lottery.status == LotteryStatus.RESOLVED) revert LotteryEnded();
+
+        address[] storage players = lotteryPlayers[lotteryId];
+        uint256 playerCount = players.length;
+
+        require(playerCount > 0, "No players to refund");
+
+        lottery.status = LotteryStatus.RESOLVED; // prevent reentry
+
+        for (uint256 i = 0; i < playerCount; i++) {
+            address player = players[i];
+            uint256 stake = playerStakes[lotteryId][player];
+
+            if (stake > 0) {
+                playerStakes[lotteryId][player] = 0;
+
+                (bool success, ) = player.call{value: stake}("");
+                require(success, "Refund failed");
+
+                emit RefundedPlayer(lotteryId, player, stake);
+            }
+        }
+
+        delete lotteryPlayers[lotteryId];
+        lottery.totalPot = 0;
+
+        //_createLotteryWithDuration();
     }
 }
