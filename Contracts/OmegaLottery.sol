@@ -27,6 +27,7 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
     error LotteryNotEnded();
     error LotteryNotOpen();
     error LotteryNotStarted();
+    error RequestNotTimedOut();
 
     error NotEnoughPlayers();
 
@@ -84,6 +85,12 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
         LotteryStatus lotteryStatus
     );
 
+    event LotteryRefundedAfterVRFFailure
+    (
+        uint256 indexed lotteryId,
+        uint256 requestId
+    );
+
     // TYPES
     enum LotteryStatus 
     {
@@ -103,6 +110,7 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
         address winner;     // empty until lottery resolves
         uint256 randomValue;    // store VRF response on chain so that it is auditable
         uint256 requestId;
+        uint256 vrfRequestTime;
     }
 
     // STORAGE
@@ -118,6 +126,8 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
     uint32 public callbackGasLimit;
     uint16 public requestConfirmations;
     uint32 public numWords;
+
+    uint256 allowableVrfDelay = 10 minutes;
 
     mapping(uint256 => uint256) public requestToLottery;    // requestId => lotteryId
     uint256 public lastRequestId;
@@ -208,6 +218,7 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
         requestToLottery[requestId] = lotteryId;
         lastRequestId = requestId;
         lottery.requestId = requestId;  // used to verify VRF response on-chain
+        lottery.vrfRequestTime = block.timestamp;
     }
 
     // FULFILL RANDOM WORDS
@@ -280,22 +291,34 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
 
         Lottery memory lottery = lotteries[currentLotteryId];
 
-        bool timePassed = block.timestamp >= lottery.endTime;
-        bool isOpen = lottery.status == LotteryStatus.OPEN;
+        bool readyToDraw = (lottery.status == LotteryStatus.OPEN) && (block.timestamp >= lottery.endTime);
+        bool vrfTimedOut = (lottery.status == LotteryStatus.DRAWING) && (block.timestamp >= lottery.vrfRequestTime + allowableVrfDelay);
 
-        upkeepNeeded = (timePassed && isOpen);    // if true, performUpkeep fires off
+        upkeepNeeded = (readyToDraw || vrfTimedOut);    // if true, performUpkeep fires off
         performData = abi.encode(currentLotteryId); // data to be used in performUpkeep
     }
 
-    function performUpkeep(bytes calldata performData) external override {
+    function performUpkeep(bytes calldata performData) external override nonReentrant {
         uint256 lotteryId = abi.decode(performData, (uint256));
 
         Lottery storage lottery = lotteries[lotteryId];
 
+        if (lottery.status == LotteryStatus.DRAWING)
+        {
+            if(block.timestamp < lottery.vrfRequestTime + allowableVrfDelay)
+            {
+                revert("Upkeep not needed");
+            } 
+            
+            _refundAll(lotteryId);
+            return;
+        }
+
         bool timePassed = block.timestamp >= lottery.endTime;
         bool isOpen = lottery.status == LotteryStatus.OPEN;
 
-        if (!(timePassed && isOpen)) {
+        if (!(timePassed && isOpen)) 
+        {
             revert("Upkeep not needed");
         }
 
@@ -321,6 +344,58 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
         emit TreasuryUpdated(_treasuryAddress, newTreasury);
         _treasuryAddress = newTreasury;
     }
+    
+    // Returns all VRF-related data for a given lottery so users can independently verify the randomness used to select the winner. 
+    // Including:
+    // requestId (to locate the fulfillment transaction and proof on-chain), 
+    // randomValue, 
+    // & the VRF configuration parameters used for the request.
+    function getRandomnessDetails(uint256 lotteryId) external view returns (uint256 requestId, uint256 randomValue, bytes32 vrfKeyHash, uint256 subscriptionId)
+    {
+        Lottery memory lottery = lotteries[lotteryId];
+        return (lottery.requestId, lottery.randomValue, keyHash, s_subscriptionId);
+    }
+
+    // REFUND ALL
+    function _refundAll(uint256 lotteryId) internal {
+        Lottery storage lottery = lotteries[lotteryId];
+        uint256 requestId = lottery.requestId;
+
+        // make sure lottery is stuck in DRAWING...
+        if (lottery.status == LotteryStatus.OPEN) revert LotteryNotEnded();
+        if (lottery.status == LotteryStatus.RESOLVED) revert LotteryEnded();
+        if (block.timestamp < lottery.vrfRequestTime + allowableVrfDelay) revert RequestNotTimedOut();
+
+        address[] storage players = lotteryPlayers[lotteryId];
+        uint256 playerCount = players.length;
+
+        for (uint256 i = 0; i < playerCount; i++) {
+            address player = players[i];
+            uint256 stake = playerStakes[lotteryId][player];
+
+            if (stake > 0) {
+                playerStakes[lotteryId][player] = 0;
+
+                (bool success, ) = player.call{value: stake}("");
+                require(success, "Refund failed");
+
+                emit RefundedPlayer(lotteryId, player, stake);
+            }
+        }
+
+        lottery.status = LotteryStatus.RESOLVED;
+        emit LotteryStatusUpdated(lotteryId, lottery.status);
+        
+        lottery.totalPot = 0;
+
+        delete lotteryPlayers[lotteryId];
+        delete requestToLottery[requestId];
+
+        emit LotteryRefundedAfterVRFFailure(lotteryId, requestId);
+
+        // create the next lottery
+        _createLotteryWithDuration();
+    }
 
     // VIEW FUNCTIONS
     function getLottery(uint256 lotteryId) external view returns (Lottery memory lottery)
@@ -342,50 +417,10 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
     {
         return lotteryPlayers[lotteryId];
     }
-    
-    // Returns all VRF-related data for a given lottery so users can independently verify the randomness used to select the winner. 
-    // Including:
-    // requestId (to locate the fulfillment transaction and proof on-chain), 
-    // randomValue, 
-    // & the VRF configuration parameters used for the request.
-    function getRandomnessDetails(uint256 lotteryId) external view returns (uint256 requestId, uint256 randomValue, bytes32 vrfKeyHash, uint256 subscriptionId)
+
+    // TESTING ONLY
+    function setSubscriptionId(uint256 _subscriptionId) external onlyOwner
     {
-        Lottery memory lottery = lotteries[lotteryId];
-        return (lottery.requestId, lottery.randomValue, keyHash, s_subscriptionId);
-    }
-
-    // ADMIN INTERVENTION (WIP)
-    // REFUND ALL
-    function refundAll(uint256 lotteryId) external onlyOwner nonReentrant {
-        Lottery storage lottery = lotteries[lotteryId];
-
-        if (lottery.status == LotteryStatus.OPEN) revert LotteryNotEnded();
-        if (lottery.status == LotteryStatus.RESOLVED) revert LotteryEnded();
-
-        address[] storage players = lotteryPlayers[lotteryId];
-        uint256 playerCount = players.length;
-
-        require(playerCount > 0, "No players to refund");
-
-        lottery.status = LotteryStatus.RESOLVED; // prevent reentry
-
-        for (uint256 i = 0; i < playerCount; i++) {
-            address player = players[i];
-            uint256 stake = playerStakes[lotteryId][player];
-
-            if (stake > 0) {
-                playerStakes[lotteryId][player] = 0;
-
-                (bool success, ) = player.call{value: stake}("");
-                require(success, "Refund failed");
-
-                emit RefundedPlayer(lotteryId, player, stake);
-            }
-        }
-
-        delete lotteryPlayers[lotteryId];
-        lottery.totalPot = 0;
-
-        //_createLotteryWithDuration();
+        s_subscriptionId = _subscriptionId;
     }
 }
