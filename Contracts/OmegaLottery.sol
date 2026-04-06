@@ -5,8 +5,8 @@ pragma solidity ^0.8.30;
 import {VRFConsumerBaseV2Plus} from "@chainlink/contracts/src/v0.8/vrf/dev/VRFConsumerBaseV2Plus.sol";
 import {VRFV2PlusClient} from "@chainlink/contracts/src/v0.8/vrf/dev/libraries/VRFV2PlusClient.sol";
 import {AutomationCompatibleInterface} from "@chainlink/contracts/src/v0.8/automation/AutomationCompatible.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Strings.sol";
 
 // CONTRACT
@@ -44,49 +44,50 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
         uint256 endTime
     );
 
+    event LotteryStatusUpdated
+    (
+        uint256 indexed lotteryId,
+        LotteryStatus lotteryStatus,
+        uint256 timestamp
+    );
+
     event LotteryEntered
     (
         uint256 indexed lotteryId,
-        address indexed playerAddress,
-        uint256 playerStake
+        address indexed user,
+        uint256 amount
+    );
+
+    event LotteryRefunded
+    (
+        uint256 indexed lotteryId,
+        uint256 requestId
     );
 
     event WinnerSelected
     (
         uint256 indexed lotteryId,
-        address indexed winnerAddress
+        address indexed user
     );
 
     event WinnerPaid
     (
         uint256 indexed lotteryId,
-        address indexed winnerAddress,
-        uint256 winnerPayout,
-        uint256 treasuryFee,
+        address indexed user,
+        uint256 payout,
+        uint256 fee,
         uint256 totalPot
     );
 
-    event TreasuryUpdated
-    (
-        address oldTreasury,
-        address newTreasury
-    );
-
-    event RefundedPlayer
+    event RefundIssued
     (
         uint256 indexed lotteryId, 
-        address indexed player, 
+        address indexed user, 
         uint256 amount
     );
 
-    event LotteryStatusUpdated
-    (
-        uint256 indexed lotteryId,
-        LotteryStatus lotteryStatus
-    );
-
-    event LotteryRefundedAfterVRFFailure
-    (
+    event RandomnessRequested
+    (   
         uint256 indexed lotteryId,
         uint256 requestId
     );
@@ -148,7 +149,7 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
         lotteryDuration = _lotteryDuration;
 
         // immediately create first lottery
-        _createLotteryWithDuration();
+        _createLottery();
     }
 
     // JOIN LOTTERY
@@ -177,7 +178,7 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
     }
     
     // LOTTERY CREATION
-    function _createLotteryWithDuration() internal {
+    function _createLottery() internal {
         uint256 lotteryId = lotteryIdCounter++;
 
         uint256 startTime = block.timestamp;
@@ -190,8 +191,8 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
         lottery.endTime = endTime;
         lottery.status = LotteryStatus.OPEN;
 
-        emit LotteryStatusUpdated(lotteryId, lottery.status);
         emit LotteryCreated(lotteryId, defaultEntryFee, startTime, endTime);
+        emit LotteryStatusUpdated(lotteryId, lottery.status, block.timestamp);
     }
 
     // REQUEST WINNER
@@ -201,7 +202,7 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
 
         // modify state
         lottery.status = LotteryStatus.DRAWING;
-        emit LotteryStatusUpdated(lotteryId, lottery.status);
+        emit LotteryStatusUpdated(lotteryId, lottery.status, block.timestamp);
 
         uint256 requestId = s_vrfCoordinator.requestRandomWords(
             VRFV2PlusClient.RandomWordsRequest(
@@ -214,6 +215,8 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
                 extraArgs: VRFV2PlusClient._argsToBytes(VRFV2PlusClient.ExtraArgsV1({nativePayment: false}))
             })
         );
+
+        emit RandomnessRequested(lotteryId, requestId);
 
         requestToLottery[requestId] = lotteryId;
         lastRequestId = requestId;
@@ -234,19 +237,19 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
         uint256 randomValue = randomWords[0];
         lottery.randomValue = randomValue;
 
-        selectWinner(lotteryId);
+        _selectWinner(lotteryId);
 
         lottery.status = LotteryStatus.RESOLVED;
-        emit LotteryStatusUpdated(lotteryId, lottery.status);
+        emit LotteryStatusUpdated(lotteryId, lottery.status, block.timestamp);
 
         delete requestToLottery[requestId]; // keep storage clean and prevents replay attacks
 
         // INTERACTIONS
-        payWinner(lotteryId);
+        _payWinner(lotteryId);
     }
 
     // SELECT WINNER
-    function selectWinner(uint256 lotteryId) internal returns(address winnerAddress)
+    function _selectWinner(uint256 lotteryId) internal returns(address winnerAddress)
     {
         Lottery storage lottery = lotteries[lotteryId];     // lottery object
 
@@ -262,7 +265,7 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
     }
     
     // PAY WINNER
-    function payWinner(uint256 lotteryId) internal 
+    function _payWinner(uint256 lotteryId) internal 
     {
         Lottery storage lottery = lotteries[lotteryId];
         address winnerAddress = lottery.winner;
@@ -279,7 +282,7 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
         emit WinnerPaid(lotteryId, winnerAddress, winnerCut, treasuryCut, totalPot);
         delete lotteryPlayers[lotteryId];
 
-        _createLotteryWithDuration();
+        _createLottery();
     }
 
     // CHAINLINK AUTOMATION
@@ -327,22 +330,14 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
         // automatically rollover if no players joined the lottery
         if (playerCount == 0) {
             lottery.status = LotteryStatus.RESOLVED;
+            emit LotteryStatusUpdated(lotteryId, lottery.status, block.timestamp);
 
-            _createLotteryWithDuration();
+            _createLottery();
             return;
         }
 
         // otherwise, request randomness
         _requestWinner(lotteryId);
-    }
-    
-    // TREASURY
-    function setTreasury(address newTreasury) external onlyOwner 
-    {
-        if (newTreasury == address(0)) revert InvalidTreasuryAddress();
-
-        emit TreasuryUpdated(_treasuryAddress, newTreasury);
-        _treasuryAddress = newTreasury;
     }
     
     // Returns all VRF-related data for a given lottery so users can independently verify the randomness used to select the winner. 
@@ -379,22 +374,22 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
                 (bool success, ) = player.call{value: stake}("");
                 require(success, "Refund failed");
 
-                emit RefundedPlayer(lotteryId, player, stake);
+                emit RefundIssued(lotteryId, player, stake);
             }
         }
 
         lottery.status = LotteryStatus.RESOLVED;
-        emit LotteryStatusUpdated(lotteryId, lottery.status);
-        
         lottery.totalPot = 0;
+
+        emit LotteryStatusUpdated(lotteryId, lottery.status, block.timestamp);
 
         delete lotteryPlayers[lotteryId];
         delete requestToLottery[requestId];
 
-        emit LotteryRefundedAfterVRFFailure(lotteryId, requestId);
+        emit LotteryRefunded(lotteryId, requestId);
 
         // create the next lottery
-        _createLotteryWithDuration();
+        _createLottery();
     }
 
     // VIEW FUNCTIONS
