@@ -450,4 +450,9 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
     {
         return activePlayerStakes[lotteryId][user];
     }
+
+    function getWinnerCut() external view returns (uint256)
+    {
+        return _winnerCut;
+    }
 }
