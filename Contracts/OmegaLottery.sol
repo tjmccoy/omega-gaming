@@ -2,10 +2,9 @@
 pragma solidity ^0.8.30;
 
 // IMPORTS
+import {AutomationCompatibleInterface} from "@chainlink/contracts/src/v0.8/automation/AutomationCompatible.sol";
 import {VRFConsumerBaseV2Plus} from "@chainlink/contracts/src/v0.8/vrf/dev/VRFConsumerBaseV2Plus.sol";
 import {VRFV2PlusClient} from "@chainlink/contracts/src/v0.8/vrf/dev/libraries/VRFV2PlusClient.sol";
-import {AutomationCompatibleInterface} from "@chainlink/contracts/src/v0.8/automation/AutomationCompatible.sol";
-
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Strings.sol";
 
@@ -16,6 +15,7 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
 
     // Treasury Address
     address _treasuryAddress;
+    uint256 _winnerCut;
 
     // ERRORS
     error InsufficientFunds();
@@ -27,13 +27,13 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
     error LotteryNotEnded();
     error LotteryNotOpen();
     error LotteryNotStarted();
-    error RequestNotTimedOut();
 
     error NotEnoughPlayers();
+    error RequestNotTimedOut();
 
     // Lottery Creation Automation
-    uint256 public immutable lotteryDuration;
-    uint256 public immutable defaultEntryFee;
+    uint256 public immutable _lotteryDuration;
+    uint256 public immutable _defaultEntryFee;
     
     // EVENTS
     event LotteryCreated
@@ -42,13 +42,6 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
         uint256 entryFee,
         uint256 startTime,
         uint256 endTime
-    );
-
-    event LotteryStatusUpdated
-    (
-        uint256 indexed lotteryId,
-        LotteryStatus lotteryStatus,
-        uint256 timestamp
     );
 
     event LotteryEntered
@@ -64,10 +57,37 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
         uint256 requestId
     );
 
-    event WinnerSelected
+    event LotteryStatusUpdated
     (
         uint256 indexed lotteryId,
-        address indexed user
+        LotteryStatus lotteryStatus,
+        uint256 timestamp
+    );
+
+    event RandomnessRequested
+    (   
+        uint256 indexed lotteryId,
+        uint256 requestId
+    );
+
+    event RefundFailed
+    (
+        uint256 indexed lotteryId,
+        address indexed user,
+        uint256 amount
+    );
+
+    event RefundIssued
+    (
+        uint256 indexed lotteryId, 
+        address indexed user, 
+        uint256 amount
+    );
+
+    event WinnerCutUpdated
+    (
+        uint256 oldAmount,
+        uint256 newAmount
     );
 
     event WinnerPaid
@@ -79,17 +99,10 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
         uint256 totalPot
     );
 
-    event RefundIssued
+    event WinnerSelected
     (
-        uint256 indexed lotteryId, 
-        address indexed user, 
-        uint256 amount
-    );
-
-    event RandomnessRequested
-    (   
         uint256 indexed lotteryId,
-        uint256 requestId
+        address indexed user
     );
 
     // TYPES
@@ -118,11 +131,11 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
     uint256 public lotteryIdCounter;    // incrementing lottery ID. starts @ 1
     mapping(uint256 => Lottery) internal lotteries; // lotteryId => Lottery 
     mapping(uint256 => address[]) internal lotteryPlayers;  // lotteryId => players
-    mapping(uint256 => mapping(address => uint256)) internal playerStakes;
+    mapping(uint256 => mapping(address => uint256)) internal activePlayerStakes;    // lotteryId => address => stake
 
     // CHAINLINK VRF
     uint256 public s_subscriptionId;
-    bytes32 public keyHash;
+    bytes32 public _keyHash;
 
     uint32 public callbackGasLimit;
     uint16 public requestConfirmations;
@@ -133,21 +146,22 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
     mapping(uint256 => uint256) public requestToLottery;    // requestId => lotteryId
     uint256 public lastRequestId;
     
-    constructor(address treasuryAddress, uint256 subscriptionId, address vrfCoordinator, bytes32 _keyHash, uint256 _defaultEntryFee, uint256 _lotteryDuration) VRFConsumerBaseV2Plus(vrfCoordinator)
+    constructor(address treasuryAddress, uint256 subscriptionId, address vrfCoordinator, bytes32 keyHash, uint256 defaultEntryFee, uint256 lotteryDuration, uint256 winnerCut) VRFConsumerBaseV2Plus(vrfCoordinator)
     {
         _treasuryAddress = treasuryAddress;
 
         s_subscriptionId = subscriptionId;
-        keyHash = _keyHash;
+        _keyHash = keyHash;
 
         lotteryIdCounter = 1;
         callbackGasLimit = 200_000;
         requestConfirmations = 3;
         numWords = 1;
 
-        defaultEntryFee = _defaultEntryFee;
-        lotteryDuration = _lotteryDuration;
-
+        _defaultEntryFee = defaultEntryFee;
+        _lotteryDuration = lotteryDuration;
+        _winnerCut = winnerCut;
+        
         // immediately create first lottery
         _createLottery();
     }
@@ -171,7 +185,7 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
         lottery.totalPot += msg.value;
 
         // keep track of how much each player deposits in case of refund
-        playerStakes[lotteryId][msg.sender] += msg.value;
+        activePlayerStakes[lotteryId][msg.sender] += msg.value;
 
         // send event to frontend
         emit LotteryEntered(lotteryId, msg.sender, msg.value);
@@ -182,16 +196,16 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
         uint256 lotteryId = lotteryIdCounter++;
 
         uint256 startTime = block.timestamp;
-        uint256 endTime = block.timestamp + lotteryDuration;
+        uint256 endTime = block.timestamp + _lotteryDuration;
 
         Lottery storage lottery = lotteries[lotteryId];
         lottery.id = lotteryId;
-        lottery.entryFee = defaultEntryFee;
+        lottery.entryFee = _defaultEntryFee;
         lottery.startTime = startTime;
         lottery.endTime = endTime;
         lottery.status = LotteryStatus.OPEN;
 
-        emit LotteryCreated(lotteryId, defaultEntryFee, startTime, endTime);
+        emit LotteryCreated(lotteryId, _defaultEntryFee, startTime, endTime);
         emit LotteryStatusUpdated(lotteryId, lottery.status, block.timestamp);
     }
 
@@ -207,7 +221,7 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
         uint256 requestId = s_vrfCoordinator.requestRandomWords(
             VRFV2PlusClient.RandomWordsRequest(
             {
-                keyHash: keyHash,
+                keyHash: _keyHash,
                 subId: s_subscriptionId,
                 requestConfirmations: requestConfirmations,
                 callbackGasLimit: callbackGasLimit,
@@ -239,9 +253,6 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
 
         _selectWinner(lotteryId);
 
-        lottery.status = LotteryStatus.RESOLVED;
-        emit LotteryStatusUpdated(lotteryId, lottery.status, block.timestamp);
-
         delete requestToLottery[requestId]; // keep storage clean and prevents replay attacks
 
         // INTERACTIONS
@@ -265,12 +276,12 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
     }
     
     // PAY WINNER
-    function _payWinner(uint256 lotteryId) internal 
+    function _payWinner(uint256 lotteryId) internal nonReentrant
     {
         Lottery storage lottery = lotteries[lotteryId];
         address winnerAddress = lottery.winner;
         uint256 totalPot = lottery.totalPot;
-        uint256 winnerCut = (totalPot * 98) / 100;
+        uint256 winnerCut = (totalPot * _winnerCut) / 100;
         uint256 treasuryCut = totalPot - winnerCut;
 
         (bool winnerCall, ) = winnerAddress.call{value: winnerCut}("");
@@ -281,6 +292,9 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
 
         emit WinnerPaid(lotteryId, winnerAddress, winnerCut, treasuryCut, totalPot);
         delete lotteryPlayers[lotteryId];
+
+        lottery.status = LotteryStatus.RESOLVED;
+        emit LotteryStatusUpdated(lotteryId, lottery.status, block.timestamp);
 
         _createLottery();
     }
@@ -339,20 +353,10 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
         // otherwise, request randomness
         _requestWinner(lotteryId);
     }
-    
-    // Returns all VRF-related data for a given lottery so users can independently verify the randomness used to select the winner. 
-    // Including:
-    // requestId (to locate the fulfillment transaction and proof on-chain), 
-    // randomValue, 
-    // & the VRF configuration parameters used for the request.
-    function getRandomnessDetails(uint256 lotteryId) external view returns (uint256 requestId, uint256 randomValue, bytes32 vrfKeyHash, uint256 subscriptionId)
-    {
-        Lottery memory lottery = lotteries[lotteryId];
-        return (lottery.requestId, lottery.randomValue, keyHash, s_subscriptionId);
-    }
 
     // REFUND ALL
-    function _refundAll(uint256 lotteryId) internal {
+    function _refundAll(uint256 lotteryId) internal nonReentrant 
+    {
         Lottery storage lottery = lotteries[lotteryId];
         uint256 requestId = lottery.requestId;
 
@@ -364,17 +368,23 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
         address[] storage players = lotteryPlayers[lotteryId];
         uint256 playerCount = players.length;
 
-        for (uint256 i = 0; i < playerCount; i++) {
+        for (uint256 i = 0; i < playerCount; i++) 
+        {
             address player = players[i];
-            uint256 stake = playerStakes[lotteryId][player];
+            uint256 stake = activePlayerStakes[lotteryId][player];
 
             if (stake > 0) {
-                playerStakes[lotteryId][player] = 0;
+                activePlayerStakes[lotteryId][player] = 0;
 
                 (bool success, ) = player.call{value: stake}("");
-                require(success, "Refund failed");
-
-                emit RefundIssued(lotteryId, player, stake);
+                
+                if (!success) 
+                {
+                    emit RefundFailed(lotteryId, player, stake);
+                } else 
+                {
+                    emit RefundIssued(lotteryId, player, stake);
+                }
             }
         }
 
@@ -392,7 +402,30 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
         _createLottery();
     }
 
+    function setWinnerCut(uint256 winnerCut) external 
+    {
+        // note: this sets the % of the pot that the winner of the lottery will receive.
+        // for example, winnerCut = 90 => winner takes 90%, treasury takes 10%
+        //                        = 95 => winner takes 95%, treasury takes 5%
+        uint256 oldCut = _winnerCut;
+        _winnerCut = winnerCut;
+        
+        emit WinnerCutUpdated(oldCut, winnerCut);
+    }
+
     // VIEW FUNCTIONS
+
+    // Returns all VRF-related data for a given lottery so users can independently verify the randomness used to select the winner. 
+    // Including:
+    // requestId (to locate the fulfillment transaction and proof on-chain), 
+    // randomValue, 
+    // & the VRF configuration parameters used for the request.
+    function getRandomnessDetails(uint256 lotteryId) external view returns (uint256 requestId, uint256 randomValue, bytes32 vrfKeyHash, uint256 subscriptionId)
+    {
+        Lottery memory lottery = lotteries[lotteryId];
+        return (lottery.requestId, lottery.randomValue, _keyHash, s_subscriptionId);
+    }
+
     function getLottery(uint256 lotteryId) external view returns (Lottery memory lottery)
     {
         return lotteries[lotteryId];
@@ -413,9 +446,8 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
         return lotteryPlayers[lotteryId];
     }
 
-    // TESTING ONLY
-    function setSubscriptionId(uint256 _subscriptionId) external onlyOwner
+    function getStakeByUserAddress(uint256 lotteryId, address user) external view returns (uint256)
     {
-        s_subscriptionId = _subscriptionId;
+        return activePlayerStakes[lotteryId][user];
     }
 }
