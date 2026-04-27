@@ -169,7 +169,8 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
     }
 
     // JOIN LOTTERY
-    function joinLottery(uint256 lotteryId) external payable {
+    function joinLottery(uint256 lotteryId) external payable 
+    {
         Lottery storage lottery = lotteries[lotteryId];
 
         if (lotteryId == 0) revert LotteryDNE();
@@ -196,7 +197,8 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
     }
     
     // LOTTERY CREATION
-    function _createLottery() internal {
+    function _createLottery() internal 
+    {
         uint256 lotteryId = lotteryIdCounter++;
 
         uint256 startTime = block.timestamp;
@@ -264,7 +266,8 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
     }
 
     // SELECT WINNER
-    function _selectWinner(uint256 lotteryId) internal returns (address winnerAddress) {
+    function _selectWinner(uint256 lotteryId) internal returns (address winnerAddress) 
+    {
         Lottery storage lottery = lotteries[lotteryId];
 
         uint256 ticketCount = totalTickets[lotteryId];
@@ -331,7 +334,8 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
         performData = abi.encode(currentLotteryId); // data to be used in performUpkeep
     }
 
-    function performUpkeep(bytes calldata performData) external override nonReentrant {
+    function performUpkeep(bytes calldata performData) external override nonReentrant 
+    {
         uint256 lotteryId = abi.decode(performData, (uint256));
 
         Lottery storage lottery = lotteries[lotteryId];
@@ -358,7 +362,8 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
         uint256 playerCount = totalTickets[lotteryId];
 
         // automatically rollover if no players joined the lottery
-        if (playerCount == 0) {
+        if (playerCount == 0) 
+        {
             lottery.status = LotteryStatus.RESOLVED;
             emit LotteryStatusUpdated(lotteryId, lottery.status, block.timestamp);
 
@@ -516,12 +521,14 @@ contract OmegaLottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface, R
 
         address[] storage players = lotteryPlayers[lotteryId];
 
-        for (uint256 i = 0; i < players.length; i++) {
+        for (uint256 i = 0; i < players.length; i++) 
+        {
             address player = players[i];
 
             cumulativeTickets += playerTickets[lotteryId][player];
 
-            if (winningTicket < cumulativeTickets) {
+            if (winningTicket < cumulativeTickets) 
+            {
                 return player;
             }
         }
